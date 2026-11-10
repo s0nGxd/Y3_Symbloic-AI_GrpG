@@ -311,13 +311,26 @@ def _build_model(instance, encoding, extended):
     return engine, decode, block, waste
 
 
-def solve(instance, encoding="integer", extended=True, second_solution=False):
-    """Solve without printing; timings include model building/checking, not I/O."""
+def solve(instance, encoding="integer", extended=True, second_solution=False,
+          verify_optimality=False):
+    """Solve without I/O; separately time construction and the Z3 check.
+
+    ``elapsed_ms`` remains construction + check for compatibility. Decoding,
+    independent validation and optional follow-up queries are outside it.
+    ``verify_optimality`` checks that the hard model admits no lower-cost
+    timetable using a fresh Solver, independently of Optimize's search.
+    """
+    if verify_optimality and not extended:
+        raise ValueError("Optimality verification requires the extended profile")
     start = perf_counter()
     engine, decode, block, waste = _build_model(instance, encoding, extended)
+    built = perf_counter()
     status = engine.check()
+    checked = perf_counter()
     result = dict(status=str(status), timetable=[], wasted_seats=None,
-                  elapsed_ms=(perf_counter() - start) * 1000)
+                  build_ms=(built - start) * 1000,
+                  check_ms=(checked - built) * 1000,
+                  elapsed_ms=(checked - start) * 1000)
     if status == z3.unknown:
         result["reason"] = engine.reason_unknown()
     if status != z3.sat:
@@ -327,6 +340,18 @@ def solve(instance, encoding="integer", extended=True, second_solution=False):
     result["wasted_seats"] = validate_timetable(instance, timetable, extended)
     if engine.model().eval(waste).as_long() != result["wasted_seats"]:
         raise AssertionError("Objective differs from independently calculated seat waste")
+    if verify_optimality:
+        start = perf_counter()
+        certificate = z3.Solver()
+        certificate.add(*engine.assertions())  # Copy hard rules; not the minimisation command.
+        certificate.add(waste < result["wasted_seats"])
+        certificate_status = certificate.check()
+        result.update(optimality_status=str(certificate_status),
+                      optimality_elapsed_ms=(perf_counter() - start) * 1000)
+        if certificate_status == z3.sat:
+            raise AssertionError("A better feasible timetable exists: optimisation was not optimal")
+        if certificate_status == z3.unknown:
+            result["optimality_reason"] = certificate.reason_unknown()
     if second_solution:
         start = perf_counter()
         other = z3.Solver()
@@ -434,7 +459,8 @@ def repeated_solve(instance, encoding, extended, repeats):
     """Return a representative result, median timing and repeat consistency."""
     runs = [solve(instance, encoding, extended) for _ in range(repeats)]
     result = dict(runs[0])
-    result["elapsed_ms"] = median(run["elapsed_ms"] for run in runs)
+    for timing in ("build_ms", "check_ms", "elapsed_ms"):
+        result[timing] = median(run[timing] for run in runs)
     signatures = {(run["status"], run["wasted_seats"] if extended else None) for run in runs}
     result["consistent"] = len(signatures) == 1
     if any(run["status"] == "unknown" for run in runs):
@@ -462,11 +488,13 @@ def evaluate_profile(instances, extended, counts, repeats=REPEATS):
     """One readable row per instance; printing stays outside all measured work."""
     if extended:
         print("Active: M1-M5 + E1/E2/E4. Objective E3: minimum unused seats.")
-        print(f"{'Instance':12} {'Integer':8} {'Boolean':8} {'Cost I/B':11} {'Median ms I/B':19} Check")
+        print(f"{'Instance':12} {'Integer':8} {'Boolean':8} {'Cost I/B':11} "
+              f"{'Build+check ms I/B':21} {'Check ms I/B':21} Result")
     else:
         print("Active: M1-M5. Added rules and optimisation OFF.")
-        print(f"{'Instance':12} {'Expected':8} {'Integer':8} {'Boolean':8} {'Median ms I/B':19} Check")
-    print("-" * 79)
+        print(f"{'Instance':12} {'Expected':8} {'Integer':8} {'Boolean':8} "
+              f"{'Build+check ms I/B':21} {'Check ms I/B':21} Result")
+    print("-" * 107)
     outcomes = {}
     for name, instance in instances:
         results = []
@@ -475,24 +503,26 @@ def evaluate_profile(instances, extended, counts, repeats=REPEATS):
                 results.append(repeated_solve(instance, encoding, extended, repeats))
             except (ValueError, AssertionError, z3.Z3Exception) as error:
                 results.append(dict(status="error", reason=str(error), elapsed_ms=0,
-                                    wasted_seats=None, consistent=False))
+                                    check_ms=0, wasted_seats=None, consistent=False))
         integer, boolean = results
         state = comparison_state(results, expected_status(name), extended)
         counts[state] += 1
         outcomes[name] = integer["status"]
         times = f"{integer['elapsed_ms']:.3f} / {boolean['elapsed_ms']:.3f}"
+        checks = f"{integer['check_ms']:.3f} / {boolean['check_ms']:.3f}"
         if extended:
             costs = " / ".join(str(r["wasted_seats"]) if r["wasted_seats"] is not None else "-"
                                for r in results)
             print(f"{Path(name).name:12} {integer['status']:8} {boolean['status']:8} "
-                  f"{costs:11} {times:19} {state}")
+                  f"{costs:11} {times:21} {checks:21} {state}")
         else:
             print(f"{Path(name).name:12} {expected_status(name) or '-':8} "
-                  f"{integer['status']:8} {boolean['status']:8} {times:19} {state}")
+                  f"{integer['status']:8} {boolean['status']:8} {times:21} {checks:21} {state}")
         for encoding, result in zip(ENCODINGS, results):
             if result["status"] in ("unknown", "error"):
                 print(f"  {encoding}: {result.get('reason', 'inconclusive solver result')}")
-    print("I/B = Integer / Boolean; timings include preprocessing, model construction and check.")
+    print("I/B = Integer / Boolean; each timing is the median of fresh runs, in milliseconds.")
+    print("Build+check includes preprocessing and model construction; Check times engine.check() only.")
     print("All sat timetables are independently validated; unsat/unknown validation is N/A.")
     if extended and not any(any(inst.exam_requirements.values()) for _, inst in instances):
         print("E4 NOT EXERCISED here: these inputs declare no special facility requirements.")
@@ -616,7 +646,16 @@ def print_result(instance, result, extended):
         print("Independent timetable validation: N/A (no timetable).")
         if result["status"] == "unknown":
             print(f"Reason: {result.get('reason', 'solver could not decide')}")
+    print(f"Model construction: {result['build_ms']:.3f} ms")
+    print(f"Z3 check only: {result['check_ms']:.3f} ms")
     print(f"Build + solve: {result['elapsed_ms']:.3f} ms")
+    if "optimality_status" in result:
+        descriptions = {"unsat": "PASS (no strictly better feasible timetable)",
+                        "unknown": "INCONCLUSIVE"}
+        print(f"Optimality verification: {descriptions[result['optimality_status']]} "
+              f"({result['optimality_elapsed_ms']:.3f} ms)")
+        if result["optimality_status"] == "unknown":
+            print(f"Reason: {result.get('optimality_reason', 'solver could not decide')}")
     if "second_status" in result:
         descriptions = {"sat": "another feasible timetable exists (its cost may differ)",
                         "unsat": "unique feasible timetable", "unknown": "INCONCLUSIVE"}
@@ -708,20 +747,25 @@ def main():
     parser.add_argument("--base", action="store_true", help="M1-M5 only")
     parser.add_argument("--compare", action="store_true", help="compare both methods/profiles on a ZIP or folder")
     parser.add_argument("--second-solution", action="store_true", help="check for another feasible timetable")
+    parser.add_argument("--verify-optimality", action="store_true",
+                        help="verify full-model optimum using a fresh strict-better satisfiability query")
     args = parser.parse_args()
     if args.path is None:
-        if args.base or args.encoding != "integer" or args.compare or args.second_solution:
+        if (args.base or args.encoding != "integer" or args.compare or
+                args.second_solution or args.verify_optimality):
             parser.error("Supply an instance with options, or press Run with no arguments for all sections")
         return run_walkthrough()
     try:
         if args.compare:
-            if args.base or args.encoding != "integer" or args.second_solution:
+            if args.base or args.encoding != "integer" or args.second_solution or args.verify_optimality:
                 parser.error("--compare runs both encodings and modes; use it on its own")
             return 0 if compare(args.path) else 1
         instance = read_file(args.path)
-        result = solve(instance, args.encoding, not args.base, args.second_solution)
+        result = solve(instance, args.encoding, not args.base, args.second_solution,
+                       args.verify_optimality)
         print_result(instance, result, not args.base)
-        return 1 if result["status"] == "unknown" or result.get("second_status") == "unknown" else 0
+        return 1 if any(result.get(key) == "unknown" for key in
+                        ("status", "second_status", "optimality_status")) else 0
     except (OSError, ValueError, zipfile.BadZipFile) as error:
         parser.exit(2, f"error: {error}\n")
 
