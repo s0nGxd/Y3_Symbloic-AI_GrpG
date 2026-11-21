@@ -1,0 +1,8 @@
+
+#Steps: 2
+
+#Users: 2
+#Constraints: 1
+
+Binding-of-duty s1 s2
+

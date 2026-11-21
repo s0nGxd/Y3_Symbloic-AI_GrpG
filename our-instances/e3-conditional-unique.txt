@@ -1,0 +1,5 @@
+#Steps: 2
+#Users: 2
+#Constraints: 2
+Separation-of-duty s1 s2
+Conditional s1 u1 s2 u2

@@ -1,0 +1,7 @@
+#Steps: 4
+#Users: 2
+#Constraints: 4
+Authorisations u1 s1 s2
+Binding-of-duty s1 s2
+Binding-of-duty s3 s4
+Max-workload 2

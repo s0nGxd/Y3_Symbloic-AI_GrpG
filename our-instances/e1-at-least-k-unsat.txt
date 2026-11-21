@@ -1,0 +1,8 @@
+#Steps: 3
+#Users: 3
+#Constraints: 5
+Authorisations u1 s1 s2
+Authorisations u2 s2 s3
+Authorisations u3 s3 s4
+Binding-of-duty s2 s3
+At-least-k 3 s1 s2 s3

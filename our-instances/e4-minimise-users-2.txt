@@ -1,0 +1,6 @@
+#Steps: 4
+#Users: 4
+#Constraints: 3
+Separation-of-duty s1 s2
+Separation-of-duty s3 s4
+Minimise-users
