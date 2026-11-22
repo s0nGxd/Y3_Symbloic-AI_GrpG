@@ -1,3 +1,0 @@
-#Steps: 2
-#Users: 1
-#Constraints: 0

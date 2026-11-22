@@ -1,3 +1,0 @@
-#Steps: 2
-#Users: 2
-Separation-of-duty s1 s2

@@ -1,5 +1,0 @@
-#steps:   3
-# Users : 3
-#constraints: 2
-separation-of-duty    s1   s2
-AT-MOST-K 1  s1 s3

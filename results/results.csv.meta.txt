@@ -1,10 +1,10 @@
-date: 2026-11-18T19:20:16
-machine: macOS-15.7.1-arm64-arm-64bit (arm64)
-python: 3.12.16
+date: 2026-11-22T22:43:35
+machine: Windows-11-10.0.26300-SP0 (AMD64)
+python: 3.12.9
 time limit per solve: 60.0 s
 repeats: 5 if the first run < 1 s, else 3; 1 if it timed out
 status: decided if any run decided; timed-out runs counted in 'timeouts'
 time_ms: median over the deciding runs of model building + first solve
 unique_ms: median of the uniqueness check (block + re-solve)
 ortools: 9.15.6755
-z3: 5.4.1
+z3: 5.3.3

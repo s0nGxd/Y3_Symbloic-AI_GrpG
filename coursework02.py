@@ -19,6 +19,7 @@ Use from Python (the CW2 template interface)
     Optional keyword arguments of Solver():
         silent=True        do not print the file name
         method='cpsat'     'cpsat' (A, default) | 'z3-bool' (B) | 'z3-int' (C)
+                           | 'cpsat-int' (D)
         amk='pattern'      At-most-k encoding: 'pattern' (default) | 'users'
         timeout=None       seconds per solve; None = no limit (default)
         optimise=False     E4: return a solution with the fewest users
@@ -40,13 +41,15 @@ Use from the command line
         python coursework02.py instances --test --method z3-int --timeout 60
         python coursework02.py our-instances --test
         python coursework02.py instances/example2.txt --explain
-        python coursework02.py instances --bench results.csv --methods cpsat,z3-int
+        python coursework02.py instances --bench results.csv --methods cpsat,cpsat-int
 
-Three solution approaches
-    A  cpsat    OR-Tools CP-SAT, Boolean formulation  x[s, u] = 1 <=> pi(s) = u
-    B  z3-bool  Z3, the identical Boolean formulation (fair solver comparison)
-    C  z3-int   Z3, integer formulation               a[s] = u    <=> pi(s) = u
-    (brute      exhaustive search; a testing oracle for tiny instances only)
+Four solution approaches (2 formulations x 2 solvers)
+    A  cpsat      OR-Tools CP-SAT, Boolean formulation  x[s, u] = 1 <=> pi(s) = u
+    B  z3-bool    Z3, the identical Boolean formulation (fair solver comparison)
+    C  z3-int     Z3, integer formulation               a[s] = u    <=> pi(s) = u
+    D  cpsat-int  CP-SAT, the same integer formulation in lab style
+                  (NewIntVar domains, AddAllDifferent, OnlyEnforceIf)
+    (brute        exhaustive search; a testing oracle for tiny instances only)
 At-most-k has two encodings: 'pattern' (user-independent, default) and
 'users' (one helper per user).
 
@@ -60,7 +63,8 @@ Constraints
 
 File layout (sections)
     2 Instance data      3 Parser               4 Solver back-ends
-    5 Boolean model      6 Integer model        7-8 Solve + uniqueness
+    5 Boolean model      6 Integer model (Z3)   6b Integer model (CP-SAT)
+    7-8 Solve + uniqueness
     9 Solver()           10 transform_output    11 Independent checker
     12 Test runner       12b Benchmark          13 Command line
 
@@ -186,49 +190,49 @@ def parse_instance(path: str) -> Instance:
     inst = Instance(n_steps=header["steps"], n_users=header["users"])
 
     for number, line in enumerate(body):
-        known = set(inst.source)
-        keyword, _, rest = line.partition(" ")
+        # split on any whitespace (spaces or tabs) after the keyword
+        keyword, rest = (line.split(None, 1) + [""])[:2]
         keyword = keyword.lower()
+
+        def keep(kind: str, i: int) -> None:
+            """Remember which input line created constraint (kind, i)."""
+            inst.source[kind, i] = line
+            inst.line_no[kind, i] = number
 
         if keyword in ("authorisations", "authorizations"):
             u = _users(rest)[0]
             inst.auth[u] = set(_steps(rest))
-            inst.source["auth", u] = line
+            keep("auth", u)
 
         elif keyword == "separation-of-duty":
-            s1, s2 = _steps(rest)
-            inst.source["sod", len(inst.sod)] = line
-            inst.sod.append((s1, s2))
+            keep("sod", len(inst.sod))
+            inst.sod.append(tuple(_steps(rest)))
 
         elif keyword == "binding-of-duty":
-            s1, s2 = _steps(rest)
-            inst.source["bod", len(inst.bod)] = line
-            inst.bod.append((s1, s2))
+            keep("bod", len(inst.bod))
+            inst.bod.append(tuple(_steps(rest)))
 
         elif keyword == "at-most-k":
-            k = int(_FIRST_INT.match(rest).group(1))
-            inst.source["at-most-k", len(inst.at_most_k)] = line
-            inst.at_most_k.append((k, _steps(rest)))
+            keep("at-most-k", len(inst.at_most_k))
+            inst.at_most_k.append((int(_FIRST_INT.match(rest).group(1)), _steps(rest)))
 
         elif keyword == "one-team":
-            steps_part = rest.split("(", 1)[0]
-            teams = [_users(t) for t in _TEAM.findall(rest)]
-            inst.source["one-team", len(inst.one_team)] = line
-            inst.one_team.append((_steps(steps_part), teams))
+            keep("one-team", len(inst.one_team))
+            inst.one_team.append((_steps(rest.split("(", 1)[0]),
+                                  [_users(t) for t in _TEAM.findall(rest)]))
 
         # --- extra constraints (our own) ---
         elif keyword == "at-least-k":
-            k = int(_FIRST_INT.match(rest).group(1))
-            inst.source["at-least-k", len(inst.at_least_k)] = line
-            inst.at_least_k.append((k, _steps(rest)))
+            keep("at-least-k", len(inst.at_least_k))
+            inst.at_least_k.append((int(_FIRST_INT.match(rest).group(1)), _steps(rest)))
 
         elif keyword == "max-workload":
             inst.max_workload = int(_FIRST_INT.match(rest).group(1))
-            inst.source["max-workload", 0] = line
+            keep("max-workload", 0)
 
         elif keyword == "conditional":
             (_, s1), (_, u1), (_, s2), (_, u2) = _TOKEN.findall(rest)
-            inst.source["conditional", len(inst.conditional)] = line
+            keep("conditional", len(inst.conditional))
             inst.conditional.append((int(s1) - 1, int(u1) - 1,
                                      int(s2) - 1, int(u2) - 1))
 
@@ -237,9 +241,6 @@ def parse_instance(path: str) -> Instance:
 
         else:
             raise ValueError(f"{path}: unknown constraint line: {line!r}")
-
-        for tag in set(inst.source) - known:      # the tag this line created
-            inst.line_no[tag] = number
 
     return inst
 
@@ -836,6 +837,138 @@ class Z3IntegerModel:
 
 
 # =============================================================================
+# Section 6b - Integer formulation in CP-SAT (approach D), lab style
+# =============================================================================
+class CpSatIntegerModel:
+    """a[s] = u  <=>  user u performs step s, solved by CP-SAT.
+
+    The same integer formulation as approach C, written with the CP-SAT
+    techniques from the labs, so C vs D compares solvers (as in Lab 7):
+        NewIntVar over the authorised users (C1 is the domain),
+        != and == for C2 / C3, AddAllDifferent for groups of SoD steps,
+        OnlyEnforceIf for helper Booleans and conditional rules.
+    """
+
+    def __init__(self, inst: Instance, amk: str = "pattern"):
+        self.inst = inst
+        self.amk = amk
+        self.cands = inst.candidates()
+        self.b = CpSatBackend()
+        self.m = self.b.model
+        self.a = [self.m.NewIntVarFromDomain(cp_model.Domain.FromValues(c), f"a_s{s + 1}")
+                  for s, c in enumerate(self.cands)]
+        self.eqs: Dict[Tuple[int, int], object] = {}
+        self.same: Dict[Tuple[int, int], object] = {}
+        self.sod = {tuple(sorted(p)) for p in inst.sod}
+
+    def is_user(self, s: int, u: int):
+        """Helper Boolean b <=> (a[s] == u), created once per (s, u)."""
+        if (s, u) not in self.eqs:
+            b = self.eqs[s, u] = self.m.NewBoolVar(f"is_s{s + 1}_u{u + 1}")
+            self.m.Add(self.a[s] == u).OnlyEnforceIf(b)
+            self.m.Add(self.a[s] != u).OnlyEnforceIf(b.Not())
+        return self.eqs[s, u]
+
+    def sod_groups(self) -> List[List[int]]:
+        """C2: cover the SoD pairs with groups of steps that must all differ.
+
+        Greedy: take an uncovered pair, then add every step that must differ
+        from all steps already in the group. One AddAllDifferent per group
+        propagates more than the same pairs written one != at a time.
+        """
+        adj: Dict[int, Set[int]] = {}
+        for s1, s2 in self.inst.sod:
+            adj.setdefault(s1, set()).add(s2)
+            adj.setdefault(s2, set()).add(s1)
+        left = {tuple(sorted(p)) for p in self.inst.sod}
+        groups = []
+        while left:
+            g = list(min(left))
+            for c in sorted(adj[g[0]]):
+                if c not in g and all(c in adj[d] for d in g):
+                    g.append(c)
+            left -= {tuple(sorted(p)) for p in itertools.combinations(g, 2)}
+            groups.append(g)
+        return groups
+
+    def same_user(self, s1: int, s2: int):
+        """Helper m <=> (a[s1] == a[s2]), shared by all constraints;
+        None if C2 already says the two steps differ."""
+        key = (min(s1, s2), max(s1, s2))
+        if key in self.sod:
+            return None
+        if key not in self.same:
+            m = self.same[key] = self.m.NewBoolVar(f"same_s{key[0] + 1}_s{key[1] + 1}")
+            self.m.Add(self.a[s1] == self.a[s2]).OnlyEnforceIf(m)
+            self.m.Add(self.a[s1] != self.a[s2]).OnlyEnforceIf(m.Not())
+        return self.same[key]
+
+    def firsts(self, steps, exact: bool):
+        """Pattern helper, as in approach C: f[i] OR T[i] shares a user with
+        an earlier step of T; exact=True also f[i] -> T[i] is a new user."""
+        T = list(dict.fromkeys(steps))
+        fs = []
+        for i in range(1, len(T)):
+            f = self.m.NewBoolVar("")
+            same = [m for m in (self.same_user(T[j], T[i]) for j in range(i)) if m is not None]
+            self.m.AddBoolOr([f] + same)
+            if exact:
+                self.m.AddBoolAnd([m.Not() for m in same]).OnlyEnforceIf(f)
+            fs.append(f)
+        return fs
+
+    def build(self) -> "CpSatIntegerModel":
+        """C1 is the variable domains; add C2-C5 and E1-E4."""
+        m, a, inst = self.m, self.a, self.inst
+        for g in self.sod_groups():                                   # C2
+            m.AddAllDifferent([a[s] for s in g])
+        for s1, s2 in inst.bod:                                       # C3
+            m.Add(a[s1] == a[s2])
+        for k, steps in inst.at_most_k:                               # C4
+            if self.amk == "users":
+                y = {u: m.NewBoolVar("") for s in steps for u in self.cands[s]}
+                for s in steps:
+                    for u in self.cands[s]:
+                        m.AddImplication(self.is_user(s, u), y[u])
+                m.Add(sum(y.values()) <= k)
+            else:
+                m.Add(sum(self.firsts(steps, exact=False)) <= k - 1)
+        for steps, teams in inst.one_team:                            # C5
+            t = [m.NewBoolVar("") for _ in teams]
+            m.AddExactlyOne(t)
+            for s in steps:
+                for ti, team in zip(t, teams):
+                    m.AddLinearExpressionInDomain(
+                        a[s], cp_model.Domain.FromValues(team)).OnlyEnforceIf(ti)
+        for k, steps in inst.at_least_k:                              # E1
+            m.Add(1 + sum(self.firsts(steps, exact=True)) >= k)
+        if inst.max_workload is not None:                             # E2
+            for u in range(inst.n_users):
+                lits = [self.is_user(s, u) for s in range(inst.n_steps)
+                        if u in self.cands[s]]
+                if len(lits) > inst.max_workload:
+                    m.Add(sum(lits) <= inst.max_workload)
+        for s1, u1, s2, u2 in inst.conditional:                       # E3
+            if u1 in self.cands[s1]:
+                m.Add(a[s2] != u2).OnlyEnforceIf(self.is_user(s1, u1))
+        if inst.minimise_users:                                       # E4
+            m.Minimize(sum(self.firsts(range(inst.n_steps), exact=False)))
+        return self
+
+    def solve(self, timeout: Optional[float]) -> str:
+        """Solve with CP-SAT: 'sat' | 'unsat' | 'unknown'."""
+        return self.b.solve(timeout)
+
+    def assignment(self) -> List[int]:
+        """Read back pi(s) = a[s] for every step."""
+        return [self.b.solver.Value(v) for v in self.a]
+
+    def block(self, pi: List[int]) -> None:
+        """Uniqueness: at least one step must get a different user."""
+        self.m.AddBoolOr([self.is_user(s, u).Not() for s, u in enumerate(pi)])
+
+
+# =============================================================================
 # Sections 7-8 - Solve, extract, uniqueness check (shared by all approaches)
 # =============================================================================
 @dataclass
@@ -857,7 +990,9 @@ def solve_with(make_model, inst: Instance, check_unique: bool = True,
     """Build a model, solve it, read the answer and check uniqueness.
 
     Time covers model building + first solve (as in the template); the
-    uniqueness check runs after the clock stops.
+    uniqueness check runs after the clock stops. With E4 (minimise users)
+    'other solutions exist' means any other valid assignment, not
+    necessarily another one with the same minimum number of users.
     """
     start = _now_ms()
     if any(not c for c in inst.candidates()):  # a step nobody may do
@@ -937,6 +1072,8 @@ METHODS = {
         inst, Z3Backend(optimise=inst.minimise_users), amk),
     # C: Z3, integer formulation
     "z3-int": lambda inst, amk: Z3IntegerModel(inst, amk),
+    # D: CP-SAT, the same integer formulation (lab style)
+    "cpsat-int": lambda inst, amk: CpSatIntegerModel(inst, amk),
     # Testing oracle for tiny instances (not a submitted approach)
     "brute": lambda inst, amk: BruteForceModel(inst, amk),
 }
@@ -990,7 +1127,8 @@ def Solver(filename, **kwargs):
 
     kwargs:
         silent (bool):  do not print the file name (default False).
-        method (str):   'cpsat' (A, default), 'z3-bool' (B) or 'z3-int' (C).
+        method (str):   'cpsat' (A, default), 'z3-bool' (B), 'z3-int' (C)
+                        or 'cpsat-int' (D).
         amk (str):      At-most-k encoding, 'pattern' (default) or 'users'.
         timeout (float): seconds per solve; None (default) = no limit.
         optimise (bool): E4, return a solution with the fewest users.
@@ -1077,7 +1215,9 @@ def verify(inst: Instance, pi: List[int]) -> List[str]:
 # =============================================================================
 # Section 12 - Test runner
 # =============================================================================
-# Appendix 1 table: example number -> (sat?, unique?)
+# Expected answers for example1-19: (sat?, unique?). The Appendix 1 table is
+# left blank, so these are our own answers, agreed by all four approaches and
+# by brute force on examples 1-8. (example12 is byte-identical to example11.)
 APPENDIX_ANSWERS = {
     1: (True, False), 2: (False, None), 3: (True, True), 4: (False, None),
     5: (True, True), 6: (False, None), 7: (True, True), 8: (False, None),
@@ -1119,6 +1259,8 @@ def instance_files(paths: List[str]) -> List[str]:
                           if n.endswith(".txt") and not n.endswith("-solution.txt")]
         else:
             files.append(p)
+    # one path style on every OS, so results from Windows and macOS line up
+    files = [os.path.normpath(f).replace("\\", "/") for f in files]
     key = lambda f: [int(t) if t.isdigit() else t for t in re.split(r"(\d+)", f)]
     return sorted(files, key=key)
 
@@ -1209,14 +1351,8 @@ def run_bench(paths: List[str], out_csv: str, methods: List[str],
     done = set()
     if os.path.exists(out_csv):
         with open(out_csv, newline="", encoding="utf-8") as f:
-            reader = csv.DictReader(f)
-            old_rows, old_fields = list(reader), reader.fieldnames or []
-        if old_fields != BENCH_FIELDS:            # older CSV: upgrade columns
-            with open(out_csv, "w", newline="", encoding="utf-8") as f:
-                w = csv.DictWriter(f, fieldnames=BENCH_FIELDS)
-                w.writeheader()
-                w.writerows({k: r.get(k, "") for k in BENCH_FIELDS} for r in old_rows)
-        done = {(r["file"], r["method"], r["amk"], r["optimise"]) for r in old_rows}
+            done = {(r["file"], r["method"], r["amk"], r["optimise"])
+                    for r in csv.DictReader(f)}
     _write_bench_meta(out_csv, timeout)
     new_file = not os.path.exists(out_csv)
 

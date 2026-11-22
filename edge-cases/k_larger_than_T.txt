@@ -1,4 +1,0 @@
-#Steps: 3
-#Users: 3
-#Constraints: 1
-At-most-k 5 s1 s2 s3

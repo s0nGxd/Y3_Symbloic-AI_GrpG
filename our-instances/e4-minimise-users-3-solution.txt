@@ -1,3 +1,0 @@
-sat
-# unique: no
-# min-users: 3

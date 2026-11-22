@@ -39,22 +39,20 @@ instances/example14.txt: unsat because of these lines together:
 instances/example15.txt: unsat because of these lines together:
     Binding-of-duty s2 s7
     Separation-of-duty s2 s7
-our-instances/e1-at-least-k-sat.txt: satisfiable
-our-instances/e1-at-least-k-unsat.txt: unsat because of these lines together:
+our-instances\e1-at-least-k-sat.txt: satisfiable
+our-instances\e1-at-least-k-unsat.txt: unsat because of these lines together:
     Binding-of-duty s2 s3
     At-least-k 3 s1 s2 s3
-our-instances/e2-max-workload-sat.txt: satisfiable
-our-instances/e2-max-workload-unique.txt: satisfiable
-our-instances/e2-max-workload-unsat.txt: unsat because of these lines together:
+our-instances\e2-max-workload-unique.txt: satisfiable
+our-instances\e2-max-workload-unsat.txt: unsat because of these lines together:
     Max-workload 2
-our-instances/e3-conditional-unique.txt: satisfiable
-our-instances/e3-conditional-unsat.txt: unsat because of these lines together:
+our-instances\e3-conditional-unique.txt: satisfiable
+our-instances\e3-conditional-unsat.txt: unsat because of these lines together:
     Authorisations u1 s1 s2
     Authorisations u2 s3
     Authorisations u4 s3
     Binding-of-duty s1 s3
     Separation-of-duty s1 s2
     Conditional s1 u3 s2 u1
-our-instances/e4-minimise-users-2.txt: satisfiable
-our-instances/e4-minimise-users-3.txt: satisfiable
-our-instances/mixed-all-constraints.txt: satisfiable
+our-instances\e4-minimise-users-2.txt: satisfiable
+our-instances\mixed-all-constraints.txt: satisfiable

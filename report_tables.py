@@ -20,8 +20,9 @@ import sys
 from collections import defaultdict
 
 APPROACH = {"cpsat": "A CP-SAT", "z3-bool": "B Z3 Boolean",
-            "z3-int": "C Z3 Integer", "brute": "Brute force"}
-ORDER = ["cpsat", "z3-bool", "z3-int", "brute"]
+            "z3-int": "C Z3 Integer", "cpsat-int": "D CP-SAT Integer",
+            "brute": "Brute force"}
+ORDER = ["cpsat", "z3-bool", "z3-int", "cpsat-int", "brute"]
 
 
 # --------------------------------------------------------------------------
@@ -257,7 +258,8 @@ def chart(rows, path, limit_ms):
         return False
     rows = base(rows)
     fig, ax = plt.subplots(figsize=(7.5, 4.5))
-    markers = {"cpsat": "o", "z3-bool": "s", "z3-int": "^", "brute": "x"}
+    markers = {"cpsat": "o", "z3-bool": "s", "z3-int": "^", "cpsat-int": "D",
+               "brute": "x"}
     for m in methods_in(rows):
         g = [r for r in rows if r["method"] == m and r["status"] in ("sat", "unsat", "unknown")]
         xs = [int(r["steps"]) * int(r["users"]) for r in g]

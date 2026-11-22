@@ -1,0 +1,9 @@
+﻿#steps:   3
+
+# Users : 4
+#constraints: 4
+AUTHORISATIONS	u1 s1 s2
+separation-of-duty    s1   s2
+
+At-most-k 5 s1 s2 s3
+One-team s1 s3 (u1 u2) (u3)

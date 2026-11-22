@@ -5,9 +5,9 @@ assigns exactly one user to every step so that all constraints hold, or proves
 that no such assignment exists. When it finds one, it also reports whether it is
 the **only** solution.
 
-**Status:** code complete. All 279 test instances pass (259 lecturer + 10 our
-extra-constraint tests + 10 edge-case tests), with 0 wrong answers in the final
-benchmark.
+**Status:** code complete. All 111 test instances pass (99 lecturer + 8 our
+extra-constraint tests + 4 edge-case tests). `results/` holds the final
+benchmark of all four approaches (Windows 11 laptop, 22 Nov 2026).
 
 > **What we submit:** only `coursework02.py` (single file, as the brief asks).
 > Everything else in this folder is for testing, benchmarking and the report.
@@ -41,10 +41,11 @@ coursework-SA-02/
 ├── coursework02.py        ← THE SUBMISSION: solver, tests, benchmark, all in one file
 ├── report_tables.py       ← helper (not submitted): benchmark CSV → report tables + chart
 ├── README.md              ← this file
-├── instances/             ← lecturer: example1–19 + 3/4/5-constraint + 4-constraint-hard
-├── additional-examples/   ← lecturer: more folders incl. small debug sets
-├── our-instances/         ← ours: 10 test files for the extra constraints E1–E4
-├── edge-cases/            ← ours: 10 awkward-but-valid input files (CRLF, BOM, blanks …)
+├── instances/             ← lecturer: example1–19 (12 is identical to 11)
+│                            + 3/4/5-constraint + 4-constraint-hard
+├── our-instances/         ← ours: 8 test files for the extra constraints E1–E4
+├── edge-cases/            ← ours: 4 awkward-but-valid input files (one file holds
+│                            BOM, CRLF, tabs, blank lines, any case, extra spaces)
 └── results/               ← final benchmark output used in the report
     ├── results.csv            raw data, one row per instance × approach
     ├── results.csv.meta.txt   machine, versions, time limit, repeat policy
@@ -73,7 +74,7 @@ Optional keyword arguments of `Solver()`:
 | Argument | Default | Meaning |
 | --- | --- | --- |
 | `silent` | `False` | don't print the file name |
-| `method` | `'cpsat'` | `'cpsat'` (A), `'z3-bool'` (B), `'z3-int'` (C), `'brute'` (tiny files only) |
+| `method` | `'cpsat'` | `'cpsat'` (A), `'z3-bool'` (B), `'z3-int'` (C), `'cpsat-int'` (D), `'brute'` (tiny files only) |
 | `amk` | `'pattern'` | At-most-k encoding: `'pattern'` or `'users'` |
 | `timeout` | `None` | seconds per solve (`None` = no limit, what the marker uses) |
 | `optimise` | `False` | E4: return a solution with the fewest users |
@@ -104,10 +105,10 @@ this is the only solution
 ## 4. Testing (run before every commit)
 
 ```bash
-python coursework02.py instances additional-examples our-instances edge-cases --test --timeout 60
+python coursework02.py instances our-instances edge-cases --test --timeout 60
 ```
 
-Expected last line: **`279 passed, 0 failed, 0 timed out`** (about 5 minutes; the
+Expected last line: **`111 passed, 0 failed, 0 timed out`** (a few minutes; the
 `4-constraint-hard` folder takes most of it).
 
 `--test` compares every answer with its `-solution.txt` (or the Appendix 1 table for
@@ -122,7 +123,7 @@ python coursework02.py instances/example*.txt --test --method z3-int --timeout 6
 python coursework02.py our-instances --test --method brute                # exhaustive oracle
 ```
 
-Approaches B and C time out on some hard instances — `TIME` lines are expected
+Approaches B, C and D time out on some hard instances — `TIME` lines are expected
 for them, not failures.
 
 ---
@@ -136,6 +137,7 @@ for them, not failures.
 | 4 | Solver back-ends `CpSatBackend`, `Z3Backend` behind one small interface |
 | 5 | `BooleanModel` – x[s,u] formulation, one method per constraint (approaches A, B) |
 | 6 | `Z3IntegerModel` – a[s] = user formulation (approach C); also used by `--explain` |
+| 6b | `CpSatIntegerModel` – the same integer formulation in CP-SAT (approach D) |
 | 7–8 | `solve_with()` – build, solve, read answer, uniqueness check; `explain_unsat()` |
 | 9 | `Solver()` – lecturer's interface |
 | 10 | `transform_output()` – copied unchanged from the lecturer's helper |
@@ -143,13 +145,14 @@ for them, not failures.
 | 12 | `--test` runner; 12b `--bench` benchmark |
 | 13 | command line |
 
-### Three approaches
+### Four approaches (2 formulations × 2 solvers)
 
 | | Solver | Formulation | Role |
 | --- | --- | --- | --- |
 | **A** `cpsat` | OR-Tools CP-SAT | Boolean x[s,u] = 1 ⇔ user u does step s | main, default |
 | **B** `z3-bool` | Z3 | the *identical* Boolean model | compares solvers fairly |
 | **C** `z3-int` | Z3 | integer a[s] = u | compares formulations |
+| **D** `cpsat-int` | OR-Tools CP-SAT | the *same* integer model, lab style: `NewIntVar` domains, `AddAllDifferent`, `OnlyEnforceIf` | C vs D compares solvers again (Lab 7) |
 
 ### Constraints
 
@@ -175,14 +178,15 @@ the users encoding timed out on all 20 hard instances.
 ## 6. Benchmark and report tables
 
 The data in `results/` came from these commands (about 2 hours in total;
-resumable — rerun the same command after Ctrl+C and it continues):
+resumable — rerun the same command after Ctrl+C and it continues).
+On Windows, run the `python` lines one at a time without `caffeinate`:
 
 ```bash
 caffeinate -i sh -c '
-python coursework02.py instances our-instances --bench results/results.csv --methods cpsat,brute &&
-python coursework02.py instances/example*.txt instances/3-constraint instances/4-constraint instances/5-constraint our-instances --bench results/results.csv --methods cpsat --optimise &&
+python coursework02.py instances our-instances --bench results/results.csv --methods cpsat,cpsat-int,brute &&
+python coursework02.py instances/example*.txt instances/3-constraint instances/4-constraint instances/5-constraint our-instances --bench results/results.csv --methods cpsat,cpsat-int --optimise &&
 python coursework02.py instances our-instances --bench results/results.csv --methods z3-bool,z3-int &&
-python coursework02.py instances/example16.txt instances/example17.txt instances/example18.txt instances/example19.txt instances/4-constraint-hard --bench results/results.csv --methods cpsat,z3-int --amks users &&
+python coursework02.py instances/example16.txt instances/example17.txt instances/example18.txt instances/example19.txt instances/4-constraint-hard --bench results/results.csv --methods cpsat,z3-int,cpsat-int --amks users &&
 python coursework02.py instances/example2.txt instances/example4.txt instances/example6.txt instances/example8.txt instances/example13.txt instances/example14.txt instances/example15.txt our-instances --explain --timeout 60 > results/explain.txt &&
 python report_tables.py results/results.csv'
 ```
@@ -197,14 +201,16 @@ python report_tables.py results/results.csv
 
 ### Headline results
 
-| | A CP-SAT | B Z3 Boolean | C Z3 Integer |
-| --- | --- | --- | --- |
-| Decided within 60 s | **109 / 109** | 98 / 109 | 88 / 109 |
-| Hard folder (60 steps × 500 users) | **20 / 20**, median 4.0 s | 10 / 20, median 22.2 s | 0 / 20 |
-| Wrong answers | 0 | 0 | 0 |
+| | A CP-SAT Bool | B Z3 Bool | C Z3 Int | D CP-SAT Int |
+| --- | --- | --- | --- | --- |
+| Decided within 60 s | **107 / 107** | 91 / 107 | 85 / 107 | 105 / 107 |
+| Hard folder (60 steps × 500 users) | **20 / 20**, median 10.5 s | 5 / 20, median 39.9 s | 0 / 20 | 19 / 20, median 20.3 s |
+| Wrong answers / invalid solutions | 0 | 0 | 0 | 0 |
 
-Optimisation (E4) used fewer users in 25 of 50 satisfiable instances
-(e.g. example 17: 19 → 10 users).
+Same solver, different formulation (A vs D) and same formulation, different
+solver (A vs B, C vs D): CP-SAT wins both solver comparisons, and the Boolean
+formulation beats the integer one in CP-SAT. Optimisation (E4) used fewer users
+in 47 of 93 runs (e.g. example 17: 19 → 10 users).
 
 ---
 
@@ -215,9 +221,9 @@ Optimisation (E4) used fewer users in 25 of 50 satisfiable instances
 3. Run the full test command in §4 — it must still say **279 passed**.
 4. Commit with a clear message.
 
-**Adding a new constraint type** touches six places, all marked by section headers:
+**Adding a new constraint type** touches seven places, all marked by section headers:
 `Instance` field (2) → parser branch (3) → `BooleanModel.add_…` (5) →
-`Z3IntegerModel.add_…` (6) → `verify()` (11) → a new test file with a
+`Z3IntegerModel.add_…` (6) → `CpSatIntegerModel.build` (6b) → `verify()` (11) → a new test file with a
 `-solution.txt` in `our-instances/`. Use `--method brute` to get the expected
 answer for a small test file.
 
